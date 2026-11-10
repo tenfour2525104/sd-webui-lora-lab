@@ -2,7 +2,11 @@
 
 > **English summary:** Lora Lab is an extension for AUTOMATIC1111 / Forge WebUI
 > (Classic & Neo) that helps you test multiple Lora at different strengths
-> without typing `<lora:name:weight>` tags by hand. It adds 10 Lora slots with
+> without typing `<lora:name:weight>` tags by hand. Each slot can also add the
+> Lora's trigger words (from its .civitai.info trainedWords, a JSON sidecar, or
+> the safetensors "activation text" metadata) to the front of the prompt, with
+> a per-slot checkbox, on by default and never duplicating words already in the
+> prompt. It adds 10 Lora slots with
 > search, preview thumbnails, +/-0.1 steppers and strength sliders, a
 > click-to-select thumbnail picker (with folder filter, selection frames and
 > sequence numbers), and a button that reflects the current tags into the
@@ -17,9 +21,10 @@ UI上の表記はすべて **Lora** に統一しています。
 ## できること
 
 - **Lora枠が10個**（txt2img / img2img 両方にアコーディオンで常駐。スクリプト選択は不要）
-- 各枠：**ON/OFFチェック** ＋ **検索できるドロップダウン** ＋ **サムネ表示** ＋ **強度スライダー（-2.00〜+2.00、0.05刻み）**
+- 各枠：**ON/OFFチェック** ＋ **トリガーワードON/OFFチェック** ＋ **検索できるドロップダウン** ＋ **サムネ表示** ＋ **強度スライダー（-2.00〜+2.00、0.05刻み）**
 - 強度の **−0.1 / ＋0.1 ボタン**（細かい調整はスライダー右の数値欄に直接入力も可）
-- **プロンプトに反映ボタン**（アコーディオン上部）：今の枠のタグをプロンプト欄へ直接入れる。生成時の自動追加と二重にはならない
+- **トリガーワード自動追加**：枠の「トリガー」チェックがONの Lora は、その Lora のトリガーワードが生成時にプロンプト先頭へ自動で入る（デフォルトON、枠ごとに切替可）。取得元は `.civitai.info` の trainedWords → `.json` サイドカー → safetensors の `activation text` メタデータの順。既にプロンプトにあるワードは二重に入らない。使われたワードは PNG info に `Lora Lab Trigger: ...` として記録される
+- **プロンプトに反映ボタン**（アコーディオン上部）：今の枠のトリガーワード＋タグをプロンプト欄へ直接入れる。生成時の自動追加と二重にはならない
 - 選んだ Lora の**サムネ画像**（モデルと同じ場所にある `.preview.png` など）が枠の横に出る
 - **サムネ一覧から即選べる**：フォルダと名前で絞り込んでカード一覧を表示し、サムネを**クリックした瞬間に選択**される。選んだカードには**枠と選択順の番号**が付き、開始枠から順に上の枠へ即反映される。もう一度クリックで解除。選択中の件数と内訳も表示される（サムネ画像がある Lora のみ、先頭60件まで表示）
 - 一覧に無い Lora は**名前を手入力**でも指定可（一覧の取りこぼし対策）
@@ -62,4 +67,4 @@ UI上の表記はすべて **Lora** に統一しています。
 - サムネは Lora ファイルと同じフォルダにある `<名前>.preview.png` / `<名前>.png` 等を使います。無い Lora はサムネなしです。
 - ネガティブプロンプト側への Lora 追加はしません（Loraタグは通常プロンプト側専用のため）。
 
-v1.4 / 2026-11-10
+v1.5 / 2026-11-10
