@@ -42,7 +42,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.7.1, 2026-11-10
+Author: slop (Muse) for tenho — v1.7.2, 2026-11-10
 """
 
 import html as html_lib
@@ -1178,7 +1178,15 @@ class LoraLabScript(scripts.Script):
         return [master_enabled] + slot_components
 
     # -- Generation ----------------------------------------------------------
-    def process(self, p, master_enabled=True, *slot_args):
+    # The prompt mutation MUST happen in before_process, not process:
+    # Forge snapshots p.prompt into all_prompts (setup_prompts) BEFORE
+    # scripts.process() runs, and generation reads only that snapshot —
+    # so anything appended in process() is recorded in the infotext but
+    # never reaches the sampler (the <lora:> tags never activate and the
+    # trigger words never condition the image).  before_process is
+    # called from process_images() before the snapshot, so edits made
+    # here are part of the prompt that is actually parsed and sampled.
+    def before_process(self, p, master_enabled=True, *slot_args):
         if not master_enabled:
             return
 
@@ -1207,3 +1215,8 @@ class LoraLabScript(scripts.Script):
                 p.extra_generation_params["Lora Lab Trigger"] = ", ".join(added_words)
         except Exception:
             pass
+
+    def process(self, p, master_enabled=True, *slot_args):
+        # Everything is applied in before_process (see above); process
+        # runs after the prompt snapshot, too late to affect generation.
+        return
