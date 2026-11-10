@@ -38,7 +38,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5, 2026-11-10
+Author: slop (Muse) for tenho — v1.5.1, 2026-11-10
 """
 
 import html as html_lib
@@ -187,7 +187,17 @@ def parse_civitai_info(data):
     """Trigger words from a .civitai.info document."""
     if not isinstance(data, dict):
         return []
-    return split_trigger_words(data.get("trainedWords"))
+    words = split_trigger_words(data.get("trainedWords"))
+    if words:
+        return words
+    versions = data.get("modelVersions")
+    if isinstance(versions, list):
+        for version in versions:
+            if isinstance(version, dict):
+                words = split_trigger_words(version.get("trainedWords"))
+                if words:
+                    return words
+    return []
 
 
 def parse_sidecar_json(data):
@@ -541,6 +551,18 @@ def get_trigger_words(name):
     if path is None:
         path = _PATH_MAP_CACHE.get(cleaned.rsplit("/", 1)[-1])
     words = load_trigger_words_for_path(path) if path else []
+    if not words:
+        # Same-stem fallback: another copy of the same Lora file may carry
+        # the trigger data even when the resolved copy does not.
+        stem = cleaned.rsplit("/", 1)[-1].lower()
+        for other in _PATH_MAP_CACHE.values():
+            if not other or other == path:
+                continue
+            other_stem = os.path.splitext(os.path.basename(str(other)))[0].lower()
+            if other_stem == stem:
+                words = load_trigger_words_for_path(other)
+                if words:
+                    break
     _TRIGGER_CACHE[cleaned] = words
     return words
 
@@ -778,6 +800,8 @@ class LoraLabScript(scripts.Script):
                 "プロンプト末尾へ自動で付きます。「トリガー」にチェックが入った枠は、"
                 "その Lora のトリガーワードもプロンプト先頭へ自動で入ります"
                 "（既にプロンプトにあるワードは二重に入りません）。"
+                "トリガーワードは Lora のデータファイル（.civitai.info 等）から読むので、"
+                "データが無い Lora では入りません。下のプレビューに有無が出ます。"
                 "一時的に外したい枠は左端のチェックを外してね。"
                 "下のサムネ一覧はクリックした瞬間に選択されて枠へ入ります。"
             )
@@ -796,6 +820,7 @@ class LoraLabScript(scripts.Script):
                     use_trigger = gr.Checkbox(label="トリガー", value=True)
                     name = _dropdown(f"Lora {i + 1}", catalog_names)
                     image = _image()
+                with gr.Row():
                     weight = gr.Slider(
                         minimum=WEIGHT_MIN,
                         maximum=WEIGHT_MAX,
@@ -878,6 +903,12 @@ class LoraLabScript(scripts.Script):
             parts = []
             if words:
                 parts.append("トリガー: " + ", ".join(words))
+            elif any(en and trg and clean_lora_name(nm)
+                     for en, trg, nm, _w in slots):
+                # A named slot wants triggers but the Lora carries no
+                # trigger data in any source file.  Say so explicitly:
+                # silence here reads as "the feature is broken".
+                parts.append("トリガー: （データなし）")
             if tags:
                 parts.append("タグ: " + " ".join(tags))
             return " ｜ ".join(parts)
