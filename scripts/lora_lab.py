@@ -21,14 +21,13 @@ with 10 Lora slots.  Each slot has:
 Slots are separated by thin divider lines (no per-slot thumbnails).
 
 At the top of the accordion, a "reflect to prompt" button writes the current
-slots into the prompt box directly: the collected trigger words are gathered
-at the front of the prompt (a word already present in the prompt is moved to
-the front, never silently skipped and never duplicated) and
-``<lora:name:weight>`` tags go to the end, so they are visible and editable
-there.  The preview line reports the outcome (how many words are new, how
-many were moved, how many tags were appended).  (Generation, separately,
-adds anything that is not already in the prompt, and never adds the same
-thing twice.)
+slots into the prompt box directly: each Lora is placed at the end of the
+prompt as a ``<lora:name:weight>`` tag followed by its trigger words (a word
+or tag already present in the prompt is moved there, never silently skipped
+and never duplicated), so they are visible and editable there.  The preview
+line reports the outcome (how many words are new vs. moved, how many tags
+were placed).  (Generation, separately, adds anything that is not already
+in the prompt, and never adds the same thing twice.)
 
 The thumbnail picker at the bottom is a plain HTML card grid driven by a
 small javascript file: clicking a card selects it *instantly* — the card
@@ -43,7 +42,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.6.0, 2026-11-10
+Author: slop (Muse) for tenho — v1.7.0, 2026-11-10
 """
 
 import html as html_lib
@@ -285,55 +284,106 @@ def build_prompt_with_extras(prompt, words, tags):
     return new_prompt, added_words, added_tags
 
 
-def gather_trigger_words_into_prompt(prompt, words):
+def place_triggers_behind_tags(prompt, units):
     """
-    Reflect semantics for trigger words: the full collected word list is
-    placed at the FRONT of the prompt.  A word that already appears in
-    the prompt as a comma token is MOVED to the front (its old copies
-    are removed), never silently skipped — the preview lists these
-    words, so the transfer must visibly contain them.  Words are
-    matched as whole comma tokens, case-insensitively; parenthesised
-    or weighted tokens are left untouched.  Returns
-    (new_prompt, fresh_words, moved_words): fresh = not previously in
-    the prompt, moved = already present and relocated to the front.
-    With no words the prompt is returned byte-identical.
+    Reflect semantics (tenho's call): each active Lora is written at the
+    END of the prompt as ``<lora:name:weight>`` followed by its trigger
+    words — the words belong with their Lora, behind its tag.
+
+    units: [(tag, [word, ...]), ...] in slot order.
+    Existing copies are relocated, never duplicated and never silently
+    skipped: a slotted tag is removed wherever it currently sits (even
+    inside a mixed comma token), and a trigger word already present as
+    a whole comma token is removed from the body before the tail is
+    appended.  Matching is case-insensitive for words; parenthesised or
+    weighted tokens are left untouched.  Returns
+    (new_prompt, fresh_words, moved_words, placed_tags, moved_tags).
+    With no units the prompt is returned byte-identical.
     """
-    words = list(words or [])
-    if not words:
-        return prompt or "", [], []
+    units = [(tag, list(words)) for tag, words in (units or []) if tag]
+    if not units:
+        return prompt or "", [], [], [], []
+    all_words = []
+    for _tag, words in units:
+        for word in words:
+            if word.lower() not in {w.lower() for w in all_words}:
+                all_words.append(word)
+    lowered = {w.lower() for w in all_words}
+    tags = [tag for tag, _words in units]
+
     tokens = []
     for part in (prompt or "").split(","):
         token = part.strip()
         if token:
             tokens.append(token)
     token_set = {t.lower() for t in tokens}
-    lowered = {w.lower() for w in words}
-    fresh = [w for w in words if w.lower() not in token_set]
-    moved = [w for w in words if w.lower() in token_set]
-    kept = [t for t in tokens if t.lower() not in lowered]
-    head = ", ".join(words)
-    new_prompt = (head + ", " + ", ".join(kept)) if kept else head
-    return new_prompt, fresh, moved
+    fresh = [w for w in all_words if w.lower() not in token_set]
+    moved = [w for w in all_words if w.lower() in token_set]
+    placed_tags = [t for t in tags if t not in (prompt or "")]
+    moved_tags = [t for t in tags if t in (prompt or "")]
+
+    kept = []
+    for token in tokens:
+        cleaned = token
+        for tag in tags:
+            if tag in cleaned:
+                cleaned = cleaned.replace(tag, "").strip()
+        if not cleaned:
+            continue
+        if cleaned.lower() in lowered:
+            continue
+        kept.append(cleaned)
+
+    tail_units = []
+    for tag, words in units:
+        unit = tag
+        if words:
+            unit += ", " + ", ".join(words)
+        tail_units.append(unit)
+    tail = " ".join(tail_units)
+    body = ", ".join(kept)
+    new_prompt = (body + " " + tail) if body else tail
+    return new_prompt, fresh, moved, placed_tags, moved_tags
 
 
-def reflect_status_text(words, tags, fresh_words, moved_words, added_tags):
+def slot_trigger_units(slots, resolver):
+    """
+    [(tag, [trigger words])] for the active slots, in slot order.
+    A Lora chosen in two slots collapses to one unit (the last slot's
+    weight and words, at the first slot's place), mirroring
+    build_lora_tags.
+    """
+    order = []
+    by_name = {}
+    for enabled, use_trigger, name, weight in slots:
+        if not enabled:
+            continue
+        cleaned = clean_lora_name(name)
+        if not cleaned:
+            continue
+        tag = f"<lora:{cleaned}:{format_weight(weight)}>"
+        words = list(resolver(cleaned) or []) if use_trigger else []
+        if cleaned not in by_name:
+            order.append(cleaned)
+        by_name[cleaned] = (tag, words)
+    return [by_name[name] for name in order]
+
+
+def reflect_status_text(total_words, total_tags, fresh_words, moved_words):
     """
     Human-readable summary of a reflect action, so the outcome is never
-    silent: how many trigger words were placed at the front (and how
-    many of them are new vs. moved from inside the prompt), and which
-    tags were appended vs. already present.
+    silent: how many trigger words were placed behind their Lora tags
+    (and how many of them are new vs. moved from inside the prompt),
+    and how many Lora tags were placed at the end.
     """
     parts = []
-    if words:
+    if total_words:
         parts.append(
-            f"トリガー {len(words)} 語を先頭に反映"
+            f"トリガー {total_words} 語を Lora タグの後ろに反映"
             f"（新規 {len(fresh_words or [])} 語／移動 {len(moved_words or [])} 語）"
         )
-    if added_tags:
-        parts.append(f"タグ {len(added_tags)} 件を追加")
-    skipped_tags = [t for t in (tags or []) if t not in (added_tags or [])]
-    if skipped_tags:
-        parts.append(f"タグ {len(skipped_tags)} 件は既にプロンプトにあるため省略")
+    if total_tags:
+        parts.append(f"タグ {total_tags} 件を末尾に配置")
     if not parts:
         return ""
     return "反映しました：" + "／".join(parts)
@@ -840,7 +890,7 @@ class LoraLabScript(scripts.Script):
 
         def _small_button(text):
             try:
-                return gr.Button(text, scale=0, min_width=56)
+                return gr.Button(text, scale=0, min_width=72)
             except TypeError:
                 return gr.Button(text)
 
@@ -857,6 +907,7 @@ class LoraLabScript(scripts.Script):
                 "#lora_lab_accordion .row{gap:4px;margin:0}"
                 "#lora_lab_accordion .block{padding:2px 4px}"
                 "#lora_lab_accordion .form{gap:3px}"
+                "#lora_lab_accordion button{white-space:nowrap}"
                 "</style>"
             )
             master_enabled = gr.Checkbox(
@@ -870,8 +921,9 @@ class LoraLabScript(scripts.Script):
                 "（既にプロンプトにあるワードは二重に入りません）。"
                 "トリガーワードは Lora のデータファイル（.civitai.info 等）から読むので、"
                 "データが無い Lora では入りません。下のプレビューに有無が出ます。"
-                "「プロンプトに反映」を押すと、トリガーワードはプロンプト先頭へ"
-                "集めて入ります（プロンプト内にあった語は二重にならず、先頭へ移動します）。"
+                "「プロンプトに反映」を押すと、各 Lora の `<lora:>` タグとその"
+                "トリガーワードが、タグの後ろにワードを付けた形でプロンプト末尾へ"
+                "入ります（プロンプト内にあった語やタグは二重にならず、末尾へ移動します）。"
                 "内訳は下の欄に出ます。"
                 "一時的に外したい枠は左端のチェックを外してね。"
                 "下のサムネ一覧はクリックした瞬間に選択されて枠へ入ります。"
@@ -1030,12 +1082,10 @@ class LoraLabScript(scripts.Script):
             def _reflect(prompt_text, *args):
                 values = list(args)
                 slots = _slots_from(values)
-                words = collect_trigger_words(slots, get_trigger_words)
-                tags = build_lora_tags([(en, nm, w) for en, _t, nm, w in slots])
-                new_prompt, fresh, moved = gather_trigger_words_into_prompt(prompt_text or "", words)
-                new_prompt = inject_tags_into_prompt(new_prompt, tags)
-                added_tags = [t for t in tags if t not in (prompt_text or "")]
-                status = reflect_status_text(words, tags, fresh, moved, added_tags)
+                units = slot_trigger_units(slots, get_trigger_words)
+                total_words = sum(len(words) for _tag, words in units)
+                new_prompt, fresh, moved, _pt, _mt = place_triggers_behind_tags(prompt_text or "", units)
+                status = reflect_status_text(total_words, len(units), fresh, moved)
                 if not status:
                     status = _preview_text(slots)
                 return new_prompt, status
