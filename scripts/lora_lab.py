@@ -38,7 +38,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5.4, 2026-11-10
+Author: slop (Muse) for tenho — v1.5.5, 2026-11-10
 """
 
 import html as html_lib
@@ -867,19 +867,20 @@ class LoraLabScript(scripts.Script):
                 reset_weight_btn = _wide_button("強度を全部 1.0 に戻す")
 
             for i in range(SLOT_COUNT):
-                # Two compact rows per slot.  Top: number, name, trigger,
-                # thumbnail.  Bottom: ONLY the slider and its two step
-                # buttons, so the buttons can never be separated from the
-                # slider by wrapping (a single-row layout did exactly that
-                # on narrow columns).  Labels are hidden (the number
+                # One row per slot (tenho's layout call): thumbnail at the
+                # far left, then the number checkbox, the name dropdown,
+                # the trigger checkbox, and the strength slider with its
+                # step buttons.  The slider is kept narrow (scale=1) so
+                # the strength block does not stretch across the whole
+                # accordion and its value box stays close to the trigger
+                # checkbox cluster.  Labels are hidden (the number
                 # checkbox identifies the slot) and the scoped CSS trims
-                # the gaps, keeping each row a single line tall.
+                # the gaps.
                 with gr.Row():
+                    image = _image()
                     enabled = _checkbox(f"{i + 1}", True, min_width=42)
                     name = _dropdown(f"Lora {i + 1}", catalog_names)
                     use_trigger = _checkbox("トリガー", True, min_width=80)
-                    image = _image()
-                with gr.Row():
                     try:
                         weight = gr.Slider(
                             minimum=WEIGHT_MIN,
@@ -888,7 +889,7 @@ class LoraLabScript(scripts.Script):
                             value=1.0,
                             label="強度",
                             show_label=False,
-                            scale=2,
+                            scale=1,
                         )
                     except TypeError:
                         weight = gr.Slider(
