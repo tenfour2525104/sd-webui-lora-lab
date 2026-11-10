@@ -38,7 +38,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5.1, 2026-11-10
+Author: slop (Muse) for tenho — v1.5.2, 2026-11-10
 """
 
 import html as html_lib
@@ -751,11 +751,27 @@ class LoraLabScript(scripts.Script):
         bridge_id = "lora_lab_bridge_img2img" if is_img2img else "lora_lab_bridge_txt2img"
 
         def _dropdown(label, choices):
-            kwargs = dict(choices=choices, value=None, label=label, show_label=True)
+            kwargs = dict(choices=choices, value=None, label=label,
+                          show_label=False, scale=3)
             try:
                 return gr.Dropdown(allow_custom_value=True, **kwargs)
             except TypeError:
-                return gr.Dropdown(**kwargs)
+                kwargs.pop("scale", None)
+                try:
+                    return gr.Dropdown(allow_custom_value=True, **kwargs)
+                except TypeError:
+                    return gr.Dropdown(**kwargs)
+
+        def _checkbox(label, value=True, min_width=None):
+            kwargs = dict(label=label, value=value, scale=0)
+            if min_width:
+                kwargs["min_width"] = min_width
+            try:
+                return gr.Checkbox(**kwargs)
+            except TypeError:
+                kwargs.pop("scale", None)
+                kwargs.pop("min_width", None)
+                return gr.Checkbox(**kwargs)
 
         def _wide_button(text):
             try:
@@ -771,7 +787,7 @@ class LoraLabScript(scripts.Script):
 
         def _image():
             kwargs = dict(value=None, type="filepath", interactive=False,
-                          show_label=False, height=76, width=76)
+                          show_label=False, height=48, width=48)
             try:
                 return gr.Image(**kwargs)
             except TypeError:
@@ -790,7 +806,19 @@ class LoraLabScript(scripts.Script):
         slot_components = []
         slot_images = []
 
-        with gr.Accordion("Lora Lab — 複数Lora検証（10枠）", open=False):
+        with gr.Accordion("Lora Lab — 複数Lora検証（10枠）", open=False,
+                          elem_id="lora_lab_accordion"):
+            # Compact spacing for this accordion only.  (A style.css file
+            # also ships with the extension, but this Forge build does not
+            # serve extension stylesheets, so the rules are inlined here.)
+            gr.HTML(
+                "<style>"
+                "#lora_lab_accordion{--layout-gap:3px;--block-padding:3px 6px}"
+                "#lora_lab_accordion .row{gap:4px;margin:0}"
+                "#lora_lab_accordion .block{padding:2px 4px}"
+                "#lora_lab_accordion .form{gap:3px}"
+                "</style>"
+            )
             master_enabled = gr.Checkbox(
                 label="Lora Lab を有効にする（OFF の間は生成時にタグを付けません）",
                 value=True,
@@ -815,21 +843,36 @@ class LoraLabScript(scripts.Script):
                 reset_weight_btn = _wide_button("強度を全部 1.0 に戻す")
 
             for i in range(SLOT_COUNT):
+                # One compact row per slot: number, name, trigger, slider,
+                # step buttons, thumbnail.  Labels are hidden (the number
+                # checkbox identifies the slot) and the scoped style.css
+                # trims the gaps, so a slot stays a single line tall.
                 with gr.Row():
-                    enabled = gr.Checkbox(label=f"{i + 1}", value=True)
-                    use_trigger = gr.Checkbox(label="トリガー", value=True)
+                    enabled = _checkbox(f"{i + 1}", True, min_width=42)
                     name = _dropdown(f"Lora {i + 1}", catalog_names)
-                    image = _image()
-                with gr.Row():
-                    weight = gr.Slider(
-                        minimum=WEIGHT_MIN,
-                        maximum=WEIGHT_MAX,
-                        step=0.05,
-                        value=1.0,
-                        label="強度",
-                    )
+                    use_trigger = _checkbox("トリガー", True, min_width=80)
+                    try:
+                        weight = gr.Slider(
+                            minimum=WEIGHT_MIN,
+                            maximum=WEIGHT_MAX,
+                            step=0.05,
+                            value=1.0,
+                            label="強度",
+                            show_label=False,
+                            scale=2,
+                        )
+                    except TypeError:
+                        weight = gr.Slider(
+                            minimum=WEIGHT_MIN,
+                            maximum=WEIGHT_MAX,
+                            step=0.05,
+                            value=1.0,
+                            label="強度",
+                            show_label=False,
+                        )
                     minus_btn = _small_button("−0.1")
                     plus_btn = _small_button("＋0.1")
+                    image = _image()
 
                 minus_btn.click(
                     fn=lambda v: step_weight(v, -WEIGHT_STEP_BUTTON),

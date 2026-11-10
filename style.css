@@ -1,0 +1,18 @@
+/* lora-lab-compact: tighten spacing inside the Lora Lab accordion only,
+   so the 10 slots take as little vertical room as possible.
+   Note: scripts/lora_lab.py also inlines these rules via a <style> block,
+   because this Forge build does not serve extension stylesheets. */
+#lora_lab_accordion {
+    --layout-gap: 3px;
+    --block-padding: 3px 6px;
+}
+#lora_lab_accordion .row {
+    gap: 4px;
+    margin: 0;
+}
+#lora_lab_accordion .block {
+    padding: 2px 4px;
+}
+#lora_lab_accordion .form {
+    gap: 3px;
+}
