@@ -16,14 +16,19 @@ with 10 Lora slots.  Each slot has:
     prompt at generation time — words already in the prompt are not doubled
   * a searchable dropdown of the Lora files the WebUI can see
     (you can also type a name by hand if a Lora is not listed)
-  * a preview thumbnail of the selected Lora (its .preview image, if any)
   * a strength slider (-2.00 .. +2.00) with -0.1 / +0.1 step buttons
 
+Slots are separated by thin divider lines (no per-slot thumbnails).
+
 At the top of the accordion, a "reflect to prompt" button writes the current
-slots into the prompt box directly: trigger words at the front and
-``<lora:name:weight>`` tags at the end, so they are visible and editable
-there.  (Generation also adds anything that is not already in the prompt,
-and never adds the same thing twice.)
+slots into the prompt box directly: the collected trigger words are gathered
+at the front of the prompt (a word already present in the prompt is moved to
+the front, never silently skipped and never duplicated) and
+``<lora:name:weight>`` tags go to the end, so they are visible and editable
+there.  The preview line reports the outcome (how many words are new, how
+many were moved, how many tags were appended).  (Generation, separately,
+adds anything that is not already in the prompt, and never adds the same
+thing twice.)
 
 The thumbnail picker at the bottom is a plain HTML card grid driven by a
 small javascript file: clicking a card selects it *instantly* — the card
@@ -38,7 +43,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5.5, 2026-11-10
+Author: slop (Muse) for tenho — v1.6.0, 2026-11-10
 """
 
 import html as html_lib
@@ -280,21 +285,53 @@ def build_prompt_with_extras(prompt, words, tags):
     return new_prompt, added_words, added_tags
 
 
-def reflect_status_text(words, tags, added_words, added_tags):
+def gather_trigger_words_into_prompt(prompt, words):
     """
-    Human-readable summary of a reflect action.  Words/tags that were
-    skipped because they are already in the prompt are reported, never
-    silent: a silent skip reads as "the trigger did not apply".
+    Reflect semantics for trigger words: the full collected word list is
+    placed at the FRONT of the prompt.  A word that already appears in
+    the prompt as a comma token is MOVED to the front (its old copies
+    are removed), never silently skipped — the preview lists these
+    words, so the transfer must visibly contain them.  Words are
+    matched as whole comma tokens, case-insensitively; parenthesised
+    or weighted tokens are left untouched.  Returns
+    (new_prompt, fresh_words, moved_words): fresh = not previously in
+    the prompt, moved = already present and relocated to the front.
+    With no words the prompt is returned byte-identical.
+    """
+    words = list(words or [])
+    if not words:
+        return prompt or "", [], []
+    tokens = []
+    for part in (prompt or "").split(","):
+        token = part.strip()
+        if token:
+            tokens.append(token)
+    token_set = {t.lower() for t in tokens}
+    lowered = {w.lower() for w in words}
+    fresh = [w for w in words if w.lower() not in token_set]
+    moved = [w for w in words if w.lower() in token_set]
+    kept = [t for t in tokens if t.lower() not in lowered]
+    head = ", ".join(words)
+    new_prompt = (head + ", " + ", ".join(kept)) if kept else head
+    return new_prompt, fresh, moved
+
+
+def reflect_status_text(words, tags, fresh_words, moved_words, added_tags):
+    """
+    Human-readable summary of a reflect action, so the outcome is never
+    silent: how many trigger words were placed at the front (and how
+    many of them are new vs. moved from inside the prompt), and which
+    tags were appended vs. already present.
     """
     parts = []
-    if added_words:
-        parts.append(f"トリガー {len(added_words)} 語を追加")
+    if words:
+        parts.append(
+            f"トリガー {len(words)} 語を先頭に反映"
+            f"（新規 {len(fresh_words or [])} 語／移動 {len(moved_words or [])} 語）"
+        )
     if added_tags:
         parts.append(f"タグ {len(added_tags)} 件を追加")
-    skipped_words = [w for w in (words or []) if w not in (added_words or [])]
     skipped_tags = [t for t in (tags or []) if t not in (added_tags or [])]
-    if skipped_words:
-        parts.append(f"トリガー {len(skipped_words)} 語は既にプロンプトにあるため省略")
     if skipped_tags:
         parts.append(f"タグ {len(skipped_tags)} 件は既にプロンプトにあるため省略")
     if not parts:
@@ -807,26 +844,7 @@ class LoraLabScript(scripts.Script):
             except TypeError:
                 return gr.Button(text)
 
-        def _image():
-            kwargs = dict(value=None, type="filepath", interactive=False,
-                          show_label=False, height=48, width=48)
-            try:
-                return gr.Image(**kwargs)
-            except TypeError:
-                kwargs.pop("width", None)
-                return gr.Image(**kwargs)
-
-        def _preview_for(name):
-            cleaned = clean_lora_name(name)
-            if not cleaned:
-                return None
-            if cleaned in preview_map:
-                return preview_map[cleaned]
-            stem = cleaned.rsplit("/", 1)[-1]
-            return preview_map.get(stem)
-
         slot_components = []
-        slot_images = []
 
         with gr.Accordion("Lora Lab — 複数Lora検証（10枠）", open=False,
                           elem_id="lora_lab_accordion"):
@@ -852,8 +870,9 @@ class LoraLabScript(scripts.Script):
                 "（既にプロンプトにあるワードは二重に入りません）。"
                 "トリガーワードは Lora のデータファイル（.civitai.info 等）から読むので、"
                 "データが無い Lora では入りません。下のプレビューに有無が出ます。"
-                "「プロンプトに反映」を押すと、追加した語数と、既にプロンプトにあって"
-                "省略した語数が下の欄に出ます。"
+                "「プロンプトに反映」を押すと、トリガーワードはプロンプト先頭へ"
+                "集めて入ります（プロンプト内にあった語は二重にならず、先頭へ移動します）。"
+                "内訳は下の欄に出ます。"
                 "一時的に外したい枠は左端のチェックを外してね。"
                 "下のサムネ一覧はクリックした瞬間に選択されて枠へ入ります。"
             )
@@ -867,17 +886,18 @@ class LoraLabScript(scripts.Script):
                 reset_weight_btn = _wide_button("強度を全部 1.0 に戻す")
 
             for i in range(SLOT_COUNT):
-                # One row per slot (tenho's layout call): thumbnail at the
-                # far left, then the number checkbox, the name dropdown,
-                # the trigger checkbox, and the strength slider with its
-                # step buttons.  The slider is kept narrow (scale=1) so
-                # the strength block does not stretch across the whole
-                # accordion and its value box stays close to the trigger
-                # checkbox cluster.  Labels are hidden (the number
-                # checkbox identifies the slot) and the scoped CSS trims
-                # the gaps.
+                # One row per slot (tenho's layout call): the number
+                # checkbox, the name dropdown, the trigger checkbox, and
+                # the strength slider with its step buttons.  No per-slot
+                # thumbnail (it cost more width than it was worth); a
+                # separator line under each slot keeps the ten slots
+                # visually apart instead.  The slider is kept narrow
+                # (scale=1) so the strength block does not stretch across
+                # the whole accordion and its value box stays close to
+                # the trigger checkbox cluster.  Labels are hidden (the
+                # number checkbox identifies the slot) and the scoped
+                # CSS trims the gaps.
                 with gr.Row():
-                    image = _image()
                     enabled = _checkbox(f"{i + 1}", True, min_width=42)
                     name = _dropdown(f"Lora {i + 1}", catalog_names)
                     use_trigger = _checkbox("トリガー", True, min_width=80)
@@ -917,7 +937,10 @@ class LoraLabScript(scripts.Script):
                 )
 
                 slot_components.extend([enabled, use_trigger, name, weight])
-                slot_images.append(image)
+                gr.HTML(
+                    "<hr style='margin:1px 0;border:none;"
+                    "border-top:1px solid rgba(127,127,127,.28)'>"
+                )
 
             preview = gr.Textbox(
                 label="生成時に追加される内容（プレビュー）",
@@ -987,8 +1010,7 @@ class LoraLabScript(scripts.Script):
 
         def _sync_outputs(values):
             slots = _slots_from(values)
-            images = [_preview_for(nm) for _en, _t, nm, _w in slots]
-            return [_preview_text(slots)] + images
+            return [_preview_text(slots)]
 
         def _on_slot_change(*args):
             return _sync_outputs(list(args))
@@ -997,7 +1019,7 @@ class LoraLabScript(scripts.Script):
             component.change(
                 fn=_on_slot_change,
                 inputs=slot_components,
-                outputs=[preview] + slot_images,
+                outputs=[preview],
                 show_progress=False,
             )
 
@@ -1010,8 +1032,10 @@ class LoraLabScript(scripts.Script):
                 slots = _slots_from(values)
                 words = collect_trigger_words(slots, get_trigger_words)
                 tags = build_lora_tags([(en, nm, w) for en, _t, nm, w in slots])
-                new_prompt, added_words, added_tags = build_prompt_with_extras(prompt_text or "", words, tags)
-                status = reflect_status_text(words, tags, added_words, added_tags)
+                new_prompt, fresh, moved = gather_trigger_words_into_prompt(prompt_text or "", words)
+                new_prompt = inject_tags_into_prompt(new_prompt, tags)
+                added_tags = [t for t in tags if t not in (prompt_text or "")]
+                status = reflect_status_text(words, tags, fresh, moved, added_tags)
                 if not status:
                     status = _preview_text(slots)
                 return new_prompt, status
@@ -1043,7 +1067,7 @@ class LoraLabScript(scripts.Script):
         refresh_btn.click(
             fn=_refresh,
             inputs=slot_components,
-            outputs=slot_components + [preview] + slot_images + [folder_dropdown],
+            outputs=slot_components + [preview] + [folder_dropdown],
             show_progress=False,
         )
 
@@ -1053,12 +1077,12 @@ class LoraLabScript(scripts.Script):
                 values.extend([True, True, None, 1.0])
             token = str(int(time.time() * 1000))
             cards = build_cards_html(displayed, preview_map, [], bridge_id, token)
-            return values + [""] + [None] * SLOT_COUNT + [cards, [], "選択中 0 件"]
+            return values + [""] + [cards, [], "選択中 0 件"]
 
         clear_btn.click(
             fn=_clear,
             inputs=[gallery_state, selected_state],
-            outputs=slot_components + [preview] + slot_images + [cards_html, selected_state, gallery_status],
+            outputs=slot_components + [preview] + [cards_html, selected_state, gallery_status],
             show_progress=False,
         )
 
@@ -1071,7 +1095,7 @@ class LoraLabScript(scripts.Script):
         reset_weight_btn.click(
             fn=_reset_weights,
             inputs=slot_components,
-            outputs=slot_components + [preview] + slot_images,
+            outputs=slot_components + [preview],
             show_progress=False,
         )
 
@@ -1109,7 +1133,7 @@ class LoraLabScript(scripts.Script):
         bridge.input(
             fn=_on_bridge,
             inputs=[bridge, target_slot, selected_state] + slot_components,
-            outputs=slot_components + [preview] + slot_images + [gallery_status, selected_state],
+            outputs=slot_components + [preview] + [gallery_status, selected_state],
             show_progress=False,
         )
 
