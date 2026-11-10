@@ -42,7 +42,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.7.0, 2026-11-10
+Author: slop (Muse) for tenho — v1.7.1, 2026-11-10
 """
 
 import html as html_lib
@@ -896,7 +896,7 @@ class LoraLabScript(scripts.Script):
 
         slot_components = []
 
-        with gr.Accordion("Lora Lab — 複数Lora検証（10枠）", open=False,
+        with gr.Accordion("Lora Lab", open=False,
                           elem_id="lora_lab_accordion"):
             # Compact spacing for this accordion only.  (A style.css file
             # also ships with the extension, but this Forge build does not
@@ -914,20 +914,8 @@ class LoraLabScript(scripts.Script):
                 label="Lora Lab を有効にする（OFF の間は生成時にタグを付けません）",
                 value=True,
             )
-            gr.Markdown(
-                "枠ごとに Lora を選んで強度を決めると、生成時に `<lora:名前:強度>` が"
-                "プロンプト末尾へ自動で付きます。「トリガー」にチェックが入った枠は、"
-                "その Lora のトリガーワードもプロンプト先頭へ自動で入ります"
-                "（既にプロンプトにあるワードは二重に入りません）。"
-                "トリガーワードは Lora のデータファイル（.civitai.info 等）から読むので、"
-                "データが無い Lora では入りません。下のプレビューに有無が出ます。"
-                "「プロンプトに反映」を押すと、各 Lora の `<lora:>` タグとその"
-                "トリガーワードが、タグの後ろにワードを付けた形でプロンプト末尾へ"
-                "入ります（プロンプト内にあった語やタグは二重にならず、末尾へ移動します）。"
-                "内訳は下の欄に出ます。"
-                "一時的に外したい枠は左端のチェックを外してね。"
-                "下のサムネ一覧はクリックした瞬間に選択されて枠へ入ります。"
-            )
+            # No help paragraph here (tenho's call): how it works lives in
+            # the README, the panel stays clean.
 
             with gr.Row():
                 reflect_btn = _wide_button("⬆ プロンプトに反映（トリガーワード＋タグをプロンプト欄へ入れる）")
