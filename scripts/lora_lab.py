@@ -38,7 +38,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5.2, 2026-11-10
+Author: slop (Muse) for tenho — v1.5.3, 2026-11-10
 """
 
 import html as html_lib
@@ -843,14 +843,19 @@ class LoraLabScript(scripts.Script):
                 reset_weight_btn = _wide_button("強度を全部 1.0 に戻す")
 
             for i in range(SLOT_COUNT):
-                # One compact row per slot: number, name, trigger, slider,
-                # step buttons, thumbnail.  Labels are hidden (the number
-                # checkbox identifies the slot) and the scoped style.css
-                # trims the gaps, so a slot stays a single line tall.
+                # Two compact rows per slot.  Top: number, name, trigger,
+                # thumbnail.  Bottom: ONLY the slider and its two step
+                # buttons, so the buttons can never be separated from the
+                # slider by wrapping (a single-row layout did exactly that
+                # on narrow columns).  Labels are hidden (the number
+                # checkbox identifies the slot) and the scoped CSS trims
+                # the gaps, keeping each row a single line tall.
                 with gr.Row():
                     enabled = _checkbox(f"{i + 1}", True, min_width=42)
                     name = _dropdown(f"Lora {i + 1}", catalog_names)
                     use_trigger = _checkbox("トリガー", True, min_width=80)
+                    image = _image()
+                with gr.Row():
                     try:
                         weight = gr.Slider(
                             minimum=WEIGHT_MIN,
@@ -872,7 +877,6 @@ class LoraLabScript(scripts.Script):
                         )
                     minus_btn = _small_button("−0.1")
                     plus_btn = _small_button("＋0.1")
-                    image = _image()
 
                 minus_btn.click(
                     fn=lambda v: step_weight(v, -WEIGHT_STEP_BUTTON),
