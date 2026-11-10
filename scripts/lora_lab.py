@@ -38,7 +38,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.5.3, 2026-11-10
+Author: slop (Muse) for tenho — v1.5.4, 2026-11-10
 """
 
 import html as html_lib
@@ -278,6 +278,28 @@ def build_prompt_with_extras(prompt, words, tags):
     if added_tags:
         new_prompt = (new_prompt.rstrip() + " " + " ".join(added_tags)).strip()
     return new_prompt, added_words, added_tags
+
+
+def reflect_status_text(words, tags, added_words, added_tags):
+    """
+    Human-readable summary of a reflect action.  Words/tags that were
+    skipped because they are already in the prompt are reported, never
+    silent: a silent skip reads as "the trigger did not apply".
+    """
+    parts = []
+    if added_words:
+        parts.append(f"トリガー {len(added_words)} 語を追加")
+    if added_tags:
+        parts.append(f"タグ {len(added_tags)} 件を追加")
+    skipped_words = [w for w in (words or []) if w not in (added_words or [])]
+    skipped_tags = [t for t in (tags or []) if t not in (added_tags or [])]
+    if skipped_words:
+        parts.append(f"トリガー {len(skipped_words)} 語は既にプロンプトにあるため省略")
+    if skipped_tags:
+        parts.append(f"タグ {len(skipped_tags)} 件は既にプロンプトにあるため省略")
+    if not parts:
+        return ""
+    return "反映しました：" + "／".join(parts)
 
 
 def step_weight(weight, delta):
@@ -830,6 +852,8 @@ class LoraLabScript(scripts.Script):
                 "（既にプロンプトにあるワードは二重に入りません）。"
                 "トリガーワードは Lora のデータファイル（.civitai.info 等）から読むので、"
                 "データが無い Lora では入りません。下のプレビューに有無が出ます。"
+                "「プロンプトに反映」を押すと、追加した語数と、既にプロンプトにあって"
+                "省略した語数が下の欄に出ます。"
                 "一時的に外したい枠は左端のチェックを外してね。"
                 "下のサムネ一覧はクリックした瞬間に選択されて枠へ入ります。"
             )
@@ -985,13 +1009,16 @@ class LoraLabScript(scripts.Script):
                 slots = _slots_from(values)
                 words = collect_trigger_words(slots, get_trigger_words)
                 tags = build_lora_tags([(en, nm, w) for en, _t, nm, w in slots])
-                new_prompt, _aw, _at = build_prompt_with_extras(prompt_text or "", words, tags)
-                return new_prompt
+                new_prompt, added_words, added_tags = build_prompt_with_extras(prompt_text or "", words, tags)
+                status = reflect_status_text(words, tags, added_words, added_tags)
+                if not status:
+                    status = _preview_text(slots)
+                return new_prompt, status
 
             reflect_btn.click(
                 fn=_reflect,
                 inputs=[prompt_component] + slot_components,
-                outputs=[prompt_component],
+                outputs=[prompt_component, preview],
                 show_progress=False,
             )
 
