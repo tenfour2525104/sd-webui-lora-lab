@@ -42,12 +42,13 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.7.3, 2026-11-12
+Author: slop (Muse) for tenho — v1.8.1, 2026-11-12
 """
 
 import html as html_lib
 import json
 import os
+import re
 import time
 from urllib.parse import quote
 
@@ -367,6 +368,95 @@ def slot_trigger_units(slots, resolver):
             order.append(cleaned)
         by_name[cleaned] = (tag, words)
     return [by_name[name] for name in order]
+
+
+def sweep_step_values(min_v, max_v, step):
+    """
+    Inclusive sweep values from min to max by step.  The endpoint is
+    included when the range divides evenly by the step.  Float-safe:
+    values are rounded to 4 decimals.  Empty list for invalid input.
+    """
+    try:
+        lo, hi, st = float(min_v), float(max_v), float(step)
+    except (TypeError, ValueError):
+        return []
+    if st <= 0 or hi < lo:
+        return []
+    n = int(round((hi - lo) / st))
+    if n > 100000:
+        n = 100000
+    return [round(lo + i * st, 4) for i in range(n + 1)]
+
+
+def sweep_targets(slots, resolver):
+    """
+    [(name, slot_tag, words)] for the batch comparison: enabled slots
+    with a name, deduplicated by Lora (last slot's weight and words at
+    the first slot's place), mirroring slot_trigger_units but keeping
+    the name next to its tag.
+    """
+    order = []
+    by_name = {}
+    for enabled, use_trigger, name, weight in slots:
+        if not enabled:
+            continue
+        cleaned = clean_lora_name(name)
+        if not cleaned:
+            continue
+        tag = f"<lora:{cleaned}:{format_weight(weight)}>"
+        words = list(resolver(cleaned) or []) if use_trigger else []
+        if cleaned not in by_name:
+            order.append(cleaned)
+        by_name[cleaned] = (cleaned, tag, words)
+    return [by_name[name] for name in order]
+
+
+def build_sweep_schedule(targets, values):
+    """[(target_index, weight), ...]: each target in turn, each weight."""
+    plan = []
+    for ti in range(len(targets or [])):
+        for w in values or []:
+            plan.append((ti, w))
+    return plan
+
+
+def apply_sweep_to_prompt(prompt, targets, current, weight):
+    """
+    Rewrite an injected prompt for one sweep step: keep ONLY the
+    current target's tag (at the sweep weight) and its trigger words.
+    Other targets' tags are removed and their trigger words dropped
+    (whole comma tokens), so each image isolates exactly one Lora.
+    """
+    text = prompt or ""
+    if not targets or current is None or current >= len(targets):
+        return text
+    cur_name, cur_tag, _cw = targets[current]
+    drop_words = set()
+    for j, (_nm, tag, words) in enumerate(targets):
+        if j == current:
+            continue
+        if tag:
+            text = text.replace(tag, "")
+        for w in words or []:
+            drop_words.add(str(w).lower())
+    if drop_words:
+        toks = [t.strip() for t in text.split(",")]
+        toks = [t for t in toks if t and t.lower() not in drop_words]
+        text = ", ".join(toks)
+    new_tag = f"<lora:{cur_name}:{format_weight(weight)}>"
+    if cur_tag:
+        text = text.replace(cur_tag, new_tag)
+    text = re.sub(r" {2,}", " ", text)
+    text = text.replace(" ,", ",").strip().strip(",").strip()
+    return text
+
+
+def sweep_summary_text(target_count, step_count):
+    total = (target_count or 0) * (step_count or 0)
+    if target_count and step_count:
+        return (f"一括比較：対象 {target_count} 枠 × {step_count} 段階 ＝ 合計 {total} 枚"
+                "（シード固定・バッチ1で1枚ずつ生成されます）")
+    return "一括比較：対象の枠（チェックON＋Lora選択あり）と範囲・刻みを設定すると、合計枚数がここに出ます"
 
 
 def reflect_status_text(total_words, total_tags, fresh_words, moved_words):
@@ -848,6 +938,8 @@ def list_lora_names():
 # ---------------------------------------------------------------------------
 
 class LoraLabScript(scripts.Script):
+    _sweep = None  # per-job sweep plan, set in before_process
+
     def title(self):
         return "Lora Lab"
 
@@ -989,6 +1081,28 @@ class LoraLabScript(scripts.Script):
                 placeholder="（枠で Lora を選ぶとここに出ます）",
             )
 
+            # Batch comparison (strength sweep): when ON, generation
+            # produces one image per (checked Lora x step value), each
+            # image isolating one Lora at one weight, seed fixed.
+            def _number(label, value, mn, mx):
+                try:
+                    return gr.Number(label=label, value=value, minimum=mn,
+                                     maximum=mx, step=0.01, show_label=True)
+                except TypeError:
+                    return gr.Number(label=label, value=value)
+
+            with gr.Row():
+                sweep_enabled = _checkbox("一括比較", False, min_width=100)
+                sweep_min = _number("最小", -1.0, -4.0, 4.0)
+                sweep_max = _number("最大", 2.0, -4.0, 4.0)
+                sweep_step = _number("刻み", 0.5, 0.01, 4.0)
+            sweep_status = gr.Textbox(
+                label="",
+                value=sweep_summary_text(0, 0),
+                interactive=False,
+                show_label=False,
+            )
+
             gr.Markdown(
                 "**サムネ一覧から選ぶ**（サムネ画像がある Lora だけが出ます）"
                 " ― フォルダと名前で絞り込んで表示し、サムネをクリックした瞬間に選択され、"
@@ -1060,6 +1174,22 @@ class LoraLabScript(scripts.Script):
                 fn=_on_slot_change,
                 inputs=slot_components,
                 outputs=[preview],
+                show_progress=False,
+            )
+
+        def _sweep_count(*args):
+            vals = list(args)
+            slots = _slots_from(vals[:SLOT_COUNT * SLOT_STRIDE])
+            _on, mn, mx, st = vals[-4], vals[-3], vals[-2], vals[-1]
+            targets = sweep_targets(slots, lambda _n: [])
+            steps = sweep_step_values(mn, mx, st)
+            return sweep_summary_text(len(targets), len(steps))
+
+        for component in slot_components + [sweep_enabled, sweep_min, sweep_max, sweep_step]:
+            component.change(
+                fn=_sweep_count,
+                inputs=slot_components + [sweep_enabled, sweep_min, sweep_max, sweep_step],
+                outputs=[sweep_status],
                 show_progress=False,
             )
 
@@ -1175,7 +1305,7 @@ class LoraLabScript(scripts.Script):
             show_progress=False,
         )
 
-        return [master_enabled] + slot_components
+        return [master_enabled] + slot_components + [sweep_enabled, sweep_min, sweep_max, sweep_step]
 
     # -- Generation ----------------------------------------------------------
     # The prompt mutation MUST happen in before_process, not process:
@@ -1187,14 +1317,17 @@ class LoraLabScript(scripts.Script):
     # called from process_images() before the snapshot, so edits made
     # here are part of the prompt that is actually parsed and sampled.
     def before_process(self, p, master_enabled=True, *slot_args):
+        self._sweep = None
         if not master_enabled:
             return
 
-        slots = []
         values = list(slot_args)
-        for i in range(0, len(values) - 3, SLOT_STRIDE):
-            slots.append((values[i + OFF_ENABLED], values[i + OFF_TRIGGER],
-                          values[i + OFF_NAME], values[i + OFF_WEIGHT]))
+        slot_values = values[:SLOT_COUNT * SLOT_STRIDE]
+        sweep_values = values[SLOT_COUNT * SLOT_STRIDE:SLOT_COUNT * SLOT_STRIDE + 4]
+        slots = []
+        for i in range(0, len(slot_values) - 3, SLOT_STRIDE):
+            slots.append((slot_values[i + OFF_ENABLED], slot_values[i + OFF_TRIGGER],
+                          slot_values[i + OFF_NAME], slot_values[i + OFF_WEIGHT]))
         if not slots:
             return
 
@@ -1216,7 +1349,84 @@ class LoraLabScript(scripts.Script):
         except Exception:
             pass
 
+        # Batch comparison setup: plan one image per (target x step).
+        # The per-image rewrite happens in before_process_batch, which
+        # Forge calls for every iteration BEFORE that iteration's
+        # prompt is parsed and its Loras activated.
+        if len(sweep_values) == 4 and sweep_values[0]:
+            targets = sweep_targets(slots, get_trigger_words)
+            steps = sweep_step_values(sweep_values[1], sweep_values[2], sweep_values[3])
+            plan = build_sweep_schedule(targets, steps)
+            if plan:
+                self._sweep = {"targets": targets, "plan": plan}
+                try:
+                    p.n_iter = len(plan)
+                    p.batch_size = 1
+                except Exception:
+                    pass
+                try:
+                    if p.extra_generation_params is None:
+                        p.extra_generation_params = {}
+                    p.extra_generation_params["Lora Lab Sweep"] = (
+                        f"{len(targets)} Loras x {len(steps)} steps = {len(plan)} images")
+                except Exception:
+                    pass
+
+    def before_process_batch(self, p, *args, **kwargs):
+        state = getattr(self, "_sweep", None)
+        if not state:
+            return
+        prompts = kwargs.get("prompts")
+        if prompts is None:
+            return
+        batch_number = kwargs.get("batch_number", 0) or 0
+        plan = state["plan"]
+        if batch_number >= len(plan):
+            return
+        targets = state["targets"]
+        ti, weight = plan[batch_number]
+        for i in range(len(prompts)):
+            prompts[i] = apply_sweep_to_prompt(prompts[i], targets, ti, weight)
+        # Keep the records truthful per image: the infotext headline
+        # and the hires prompts are read from these lists later.
+        try:
+            if batch_number < len(p.all_prompts):
+                p.all_prompts[batch_number] = apply_sweep_to_prompt(
+                    p.all_prompts[batch_number], targets, ti, weight)
+        except Exception:
+            pass
+        try:
+            hr = getattr(p, "all_hr_prompts", None)
+            if hr is not None and batch_number < len(hr):
+                hr[batch_number] = apply_sweep_to_prompt(hr[batch_number], targets, ti, weight)
+        except Exception:
+            pass
+        try:
+            if p.extra_generation_params is None:
+                p.extra_generation_params = {}
+            name = targets[ti][0]
+            p.extra_generation_params["Lora Lab"] = f"<lora:{name}:{format_weight(weight)}>"
+            p.extra_generation_params["Lora Lab Sweep"] = (
+                f"{name} @ {format_weight(weight)} ({batch_number + 1}/{len(plan)})")
+        except Exception:
+            pass
+
+    def postprocess(self, p, processed, *args):
+        self._sweep = None
+
     def process(self, p, master_enabled=True, *slot_args):
-        # Everything is applied in before_process (see above); process
+        # Prompt changes live in before_process (see above); process
         # runs after the prompt snapshot, too late to affect generation.
+        # It does run after all_seeds is built and before the iteration
+        # loop, which makes it the one place that can pin the sweep's
+        # seeds: the per-iteration RNG (p.rng) is constructed from
+        # all_seeds BEFORE before_process_batch is called, so fixing
+        # seeds in the batch hook would be too late.
+        if getattr(self, "_sweep", None):
+            try:
+                if p.all_seeds:
+                    base = p.all_seeds[0]
+                    p.all_seeds[:] = [base] * len(p.all_seeds)
+            except Exception:
+                pass
         return
