@@ -42,7 +42,7 @@ typed them by hand, plus the trigger words of slots whose trigger checkbox
 is on, prepended to the prompt.  Both are written into the image infotext
 (``Lora Lab:`` / ``Lora Lab Trigger:``) so verification runs stay traceable.
 
-Author: slop (Muse) for tenho — v1.7.2, 2026-11-10
+Author: slop (Muse) for tenho — v1.7.3, 2026-11-12
 """
 
 import html as html_lib
@@ -98,7 +98,7 @@ OFF_WEIGHT = 3
 WEIGHT_MIN = -2.0
 WEIGHT_MAX = 2.0
 WEIGHT_STEP_BUTTON = 0.1
-GALLERY_LIMIT = 60
+GALLERY_LIMIT = None  # no cap: cards reference images by URL, so a full listing stays cheap
 LORA_EXTENSIONS = (".safetensors", ".ckpt", ".pt")
 PREVIEW_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 ALL_FOLDERS_LABEL = "すべて"
@@ -499,7 +499,7 @@ def filter_gallery(preview_map, query, folder_map=None, folder=None, limit=GALLE
         if needle and needle not in name.lower():
             continue
         names.append(name)
-        if len(names) >= limit:
+        if limit is not None and len(names) >= limit:
             break
     items = [(preview_map[name], name) for name in names]
     return names, items
